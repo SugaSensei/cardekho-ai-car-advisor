@@ -40,6 +40,12 @@ class ChatRequest(BaseModel):
 class SQLResponseSchema(BaseModel):
     sql_query: str
 
+class ExplanationRequest(BaseModel):
+    car: dict
+    rank: int
+    history: list = []
+    query: str = ""
+
 # Schema definition for system prompt guidance
 DB_SCHEMA = """
 Table Name: cars
@@ -263,6 +269,56 @@ async def chat(request: ChatRequest):
             "sql": query
         }
         
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/explain")
+async def explain_suggestion(request: ExplanationRequest):
+    if not gemini_client and not openai_client:
+        raise HTTPException(
+            status_code=400,
+            detail="No AI Provider configured. Please add GEMINI_API_KEY or OPENAI_API_KEY to your .env file."
+        )
+    
+    try:
+        # Format previous history
+        history_str = ""
+        for msg in request.history:
+            role = "User" if msg.get("sender") == "user" else "Assistant"
+            text_val = msg.get("text", "")
+            if len(text_val) > 1000:
+                text_val = text_val[:1000] + "... (truncated)"
+            history_str += f"{role}: {text_val}\n"
+
+        prompt = f"""
+You are a friendly, expert Used Car Advisor at CarDekho.
+A user is looking for a used car. Their query was: "{request.query}"
+We found some matches from the SQLite database. This car was suggested at Rank #{request.rank}:
+Car Details: {json.dumps(request.car)}
+
+Based on the conversation history below:
+{history_str}
+
+Please write a concise 2-sentence explanation of why this specific car is a great fit for their query and is ranked #{request.rank}. Focus on concrete details (e.g. its price, transmission, mileage, or age) compared to their preferences.
+Keep it direct, professional, and friendly. Do not use markdown titles or bullet points. Just return the direct explanation text.
+"""
+        
+        if gemini_client:
+            response = gemini_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt
+            )
+            explanation = response.text
+        else:
+            response = openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            explanation = response.choices[0].message.content
+            
+        return {"explanation": explanation.strip()}
     except Exception as e:
         import traceback
         traceback.print_exc()

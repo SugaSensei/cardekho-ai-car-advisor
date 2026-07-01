@@ -14,6 +14,11 @@ export default function App() {
   const [shortlist, setShortlist] = useState([]);
   const [debugSql, setDebugSql] = useState('');
 
+  // Explanation States for Top 3 suggestion breakdown
+  const [explanations, setExplanations] = useState({});
+  const [loadingExplanationIdx, setLoadingExplanationIdx] = useState(null);
+  const [expandedExplanationIdx, setExpandedExplanationIdx] = useState(null);
+
   const handleSend = async (e) => {
     e.preventDefault();
     if (!query.trim()) return;
@@ -24,6 +29,9 @@ export default function App() {
     setChatHistory(prev => [...prev, { sender: 'user', text: userMessage }]);
     setQuery('');
     setLoading(true);
+    setExplanations({});
+    setExpandedExplanationIdx(null);
+    setLoadingExplanationIdx(null);
 
     try {
       const res = await fetch('/api/chat', {
@@ -43,6 +51,41 @@ export default function App() {
       setChatHistory(prev => [...prev, { sender: 'ai', text: "Error: Failed to fetch recommendations." }]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const explainCarSuggestion = async (car, idx) => {
+    if (expandedExplanationIdx === idx) {
+      setExpandedExplanationIdx(null);
+      return;
+    }
+
+    if (explanations[idx]) {
+      setExpandedExplanationIdx(idx);
+      return;
+    }
+
+    setLoadingExplanationIdx(idx);
+    try {
+      const lastUserMessage = chatHistory.filter(m => m.sender === 'user').slice(-1)[0]?.text || '';
+      const res = await fetch('/api/explain', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          car: car,
+          rank: idx + 1,
+          history: chatHistory,
+          query: lastUserMessage
+        })
+      });
+      const data = await res.json();
+      setExplanations(prev => ({ ...prev, [idx]: data.explanation }));
+      setExpandedExplanationIdx(idx);
+    } catch (err) {
+      setExplanations(prev => ({ ...prev, [idx]: "Failed to generate explanation. Please try again." }));
+      setExpandedExplanationIdx(idx);
+    } finally {
+      setLoadingExplanationIdx(null);
     }
   };
 
@@ -154,31 +197,82 @@ export default function App() {
                   <p className="text-sm">No active matches. Chat with the Assistant on the left to run a search query!</p>
                 </div>
               ) : (
-                currentCars.map((car, idx) => (
-                  <div key={idx} className="p-4 bg-slate-900/80 border border-slate-800 hover:border-slate-700 rounded-xl flex items-center justify-between transition gap-4">
-                    <div>
-                      <h3 className="font-bold text-slate-200">{car.car_name || 'Unnamed Car'}</h3>
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-slate-400">
-                        <span className="text-amber-400 font-semibold">{formatPrice(car.selling_price)}</span>
-                        <span>•</span>
-                        <span>{car.transmission_type || 'N/A'}</span>
-                        <span>•</span>
-                        <span>{car.fuel_type || 'N/A'}</span>
-                        <span>•</span>
-                        <span>{car.km_driven !== null && car.km_driven !== undefined ? `${car.km_driven.toLocaleString()} km` : 'N/A'}</span>
-                        <span>•</span>
-                        <span>{car.mileage !== null && car.mileage !== undefined ? `${car.mileage} km/l` : 'N/A'}</span>
+                currentCars.map((car, idx) => {
+                  const isTop3 = idx < 3;
+                  const isExpanded = expandedExplanationIdx === idx;
+                  const isLoading = loadingExplanationIdx === idx;
+                  const explanation = explanations[idx];
+
+                  return (
+                    <div key={idx} className="p-4 bg-slate-900/80 border border-slate-800 hover:border-slate-700 rounded-xl flex flex-col transition gap-3">
+                      <div className="flex items-center justify-between gap-4">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="font-bold text-slate-200">{car.car_name || 'Unnamed Car'}</h3>
+                            {isTop3 && (
+                              <span className="bg-rose-500/10 text-rose-400 text-[10px] px-2 py-0.5 rounded border border-rose-500/20 font-extrabold tracking-wide uppercase">
+                                #{idx + 1} Match
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-slate-400">
+                            <span className="text-amber-400 font-semibold">{formatPrice(car.selling_price)}</span>
+                            <span>•</span>
+                            <span>{car.transmission_type || 'N/A'}</span>
+                            <span>•</span>
+                            <span>{car.fuel_type || 'N/A'}</span>
+                            <span>•</span>
+                            <span>{car.km_driven !== null && car.km_driven !== undefined ? `${car.km_driven.toLocaleString()} km` : 'N/A'}</span>
+                            <span>•</span>
+                            <span>{car.mileage !== null && car.mileage !== undefined ? `${car.mileage} km/l` : 'N/A'}</span>
+                          </div>
+                        </div>
+                        
+                        <div className="flex items-center gap-2">
+                          {isTop3 && (
+                            <button
+                              onClick={() => explainCarSuggestion(car, idx)}
+                              disabled={loadingExplanationIdx !== null && !isLoading}
+                              className={`flex items-center gap-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 border border-slate-700 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition ${
+                                isExpanded ? 'ring-2 ring-rose-500/50 bg-slate-700' : ''
+                              }`}
+                            >
+                              <Sparkles className={`w-3.5 h-3.5 text-rose-400 ${isLoading ? 'animate-spin' : ''}`} />
+                              {isLoading ? 'Thinking...' : isExpanded ? 'Hide Info' : 'Why this?'}
+                            </button>
+                          )}
+                          <button
+                            onClick={() => addToShortlist(car)}
+                            className="flex items-center gap-1.5 bg-slate-800 hover:bg-rose-900/30 hover:text-rose-400 text-slate-300 border border-slate-700 px-3 py-1.5 rounded-lg text-xs font-semibold transition"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            Shortlist
+                          </button>
+                        </div>
                       </div>
+
+                      {/* Collapsible AI Explanation section for top 3 suggestion reasons */}
+                      {isTop3 && (isExpanded || isLoading) && (
+                        <div className="mt-1 p-3 bg-slate-950/60 border border-rose-500/10 rounded-lg text-xs leading-relaxed text-slate-300 flex items-start gap-2.5">
+                          <Sparkles className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                          <div>
+                            <div className="text-[10px] text-rose-400 font-bold uppercase tracking-wider mb-1">AI Recommendation Insight</div>
+                            {isLoading ? (
+                              <div className="flex items-center gap-2 text-slate-500 font-medium">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse [animation-delay:0.2s]"></span>
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse [animation-delay:0.4s]"></span>
+                                Analyzing match attributes against your preferences...
+                              </div>
+                            ) : (
+                              <p className="font-normal text-slate-300">{explanation}</p>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <button
-                      onClick={() => addToShortlist(car)}
-                      className="flex items-center gap-1.5 bg-slate-800 hover:bg-rose-900/30 hover:text-rose-400 text-slate-300 border border-slate-700 px-3 py-1.5 rounded-lg text-xs font-semibold transition"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      Shortlist
-                    </button>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>
