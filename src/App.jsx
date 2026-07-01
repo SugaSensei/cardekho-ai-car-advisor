@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Send, Car, Sparkles, Plus, Trash2 } from 'lucide-react';
 
 export default function App() {
@@ -13,6 +13,26 @@ export default function App() {
   const [currentCars, setCurrentCars] = useState([]);
   const [shortlist, setShortlist] = useState([]);
   const [debugSql, setDebugSql] = useState('');
+
+  // Active AI Provider state
+  const [activeProvider, setActiveProvider] = useState('AI Matchmaker');
+
+  useEffect(() => {
+    fetch('/api/health')
+      .then(res => res.json())
+      .then(data => {
+        if (data.active_provider) {
+          if (data.active_provider === 'Gemini' && data.gemini_model) {
+            setActiveProvider(`Gemini (${data.gemini_model})`);
+          } else if (data.active_provider === 'OpenAI' && data.openai_model) {
+            setActiveProvider(`OpenAI (${data.openai_model})`);
+          } else {
+            setActiveProvider(data.active_provider);
+          }
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Explanation States for Top 3 suggestion breakdown
   const [explanations, setExplanations] = useState({});
@@ -119,7 +139,7 @@ export default function App() {
         </div>
         <div className="text-xs text-slate-400 bg-slate-800 px-3 py-1 rounded-full flex items-center gap-1.5 border border-slate-700">
           <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
-          Powered by Gemini 2.5 Flash
+          Powered by {activeProvider}
         </div>
       </nav>
 
