@@ -19,6 +19,8 @@ export default function App() {
     if (!query.trim()) return;
 
     const userMessage = query;
+    const currentHistory = [...chatHistory];
+    
     setChatHistory(prev => [...prev, { sender: 'user', text: userMessage }]);
     setQuery('');
     setLoading(true);
@@ -29,7 +31,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           message: userMessage,
-          history: chatHistory
+          history: currentHistory
         })
       });
       const data = await res.json();

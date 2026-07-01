@@ -78,6 +78,8 @@ RULES:
    - 'manual' or 'gear' -> transmission_type = 'Manual'
    - If they specify models without spaces (e.g. 'wagonr', 'i20', 'grand'), map them using LIKE (e.g. model LIKE '%Wagon R%' or model LIKE '%i20%' or model LIKE '%Grand%').
 7. COLUMN MAPPING: Always use the column 'selling_price' for any queries involving price, budget, cost, or lakhs. The column 'price' does NOT exist in the database; generating 'price' will result in a SQLite syntax error.
+8. AGE/YEAR MAPPING: The database contains 'vehicle_age' (age in years), NOT 'year'. To sort by newest cars or filter by year, use 'vehicle_age' (e.g., sort by 'vehicle_age ASC' to get the newest cars first). There is no 'year' column.
+9. FORBIDDEN COLUMNS: Do NOT query columns that are not in the schema (e.g. 'color', 'owner', 'location', 'city', 'variant'). If a user filters by these, ignore those filters in the SQL query. The assistant will address those preferences in the text response instead.
 """
 
 RECOMMENDER_SYSTEM_PROMPT = """
