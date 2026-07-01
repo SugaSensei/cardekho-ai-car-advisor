@@ -127,25 +127,40 @@ export default function App() {
     return `₹ ${price.toLocaleString()}`;
   };
 
-  // Render basic markdown formatting (bold, italic)
+  // Render basic markdown formatting (bold, inline code, italic, list markers)
   const renderMessageText = (text) => {
     if (!text) return null;
     
-    // Split by ** for bold elements
-    const parts = text.split(/(\*\*[^*]+\*\*)/g);
-    return parts.map((part, index) => {
-      if (part.startsWith('**') && part.endsWith('**')) {
-        const inner = part.slice(2, -2);
-        return <strong key={index} className="font-extrabold text-white">{inner}</strong>;
+    // Normalize bullet point lines starting with '* ' or '- ' to '• '
+    const normalizedText = text.replace(/^(\s*)[*-]\s+/gm, '$1• ');
+    
+    // Split by ** for bold elements first
+    const boldParts = normalizedText.split(/(\*\*[^*]+\*\*)/g);
+    return boldParts.map((boldPart, boldIdx) => {
+      if (boldPart.startsWith('**') && boldPart.endsWith('**')) {
+        const inner = boldPart.slice(2, -2);
+        return <strong key={`b-${boldIdx}`} className="font-extrabold text-white">{inner}</strong>;
       }
       
-      // Split by * for italic elements
-      const subParts = part.split(/(\*[^*]+\*)/g);
-      return subParts.map((subPart, subIndex) => {
-        if (subPart.startsWith('*') && subPart.endsWith('*')) {
-          return <em key={`${index}-${subIndex}`} className="italic text-slate-300">{subPart.slice(1, -1)}</em>;
+      // Split by ` for inline code elements
+      const codeParts = boldPart.split(/(`[^`]+`)/g);
+      return codeParts.map((codePart, codeIdx) => {
+        if (codePart.startsWith('`') && codePart.endsWith('`')) {
+          return (
+            <code key={`c-${boldIdx}-${codeIdx}`} className="bg-slate-950 border border-slate-800 text-rose-400 font-mono text-[11px] px-1.5 py-0.5 rounded-md font-semibold mx-0.5">
+              {codePart.slice(1, -1)}
+            </code>
+          );
         }
-        return subPart;
+        
+        // Split by * for italic elements
+        const italicParts = codePart.split(/(\*[^*]+\*)/g);
+        return italicParts.map((italicPart, italicIdx) => {
+          if (italicPart.startsWith('*') && italicPart.endsWith('*')) {
+            return <em key={`i-${boldIdx}-${codeIdx}-${italicIdx}`} className="italic text-slate-300">{italicPart.slice(1, -1)}</em>;
+          }
+          return italicPart;
+        });
       });
     });
   };
