@@ -19,14 +19,14 @@ app = FastAPI()
 openai_key = os.getenv("OPENAI_API_KEY")
 gemini_key = os.getenv("GEMINI_API_KEY")
 
+# Configuration via environment variables with defaults
+AI_PROVIDER = os.getenv("AI_PROVIDER", "openai").strip().lower()  # "openai" or "gemini"
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+
 # Initialize clients
 openai_client = OpenAI(api_key=openai_key) if openai_key else None
-
-if gemini_key:
-    # Initialize the new Google GenAI client
-    gemini_client = genai.Client(api_key=gemini_key)
-else:
-    gemini_client = None
+gemini_client = genai.Client(api_key=gemini_key) if gemini_key else None
 
 # Check database path
 DB_PATH = 'cardekho_cars.db'
@@ -86,6 +86,7 @@ RULES:
 7. COLUMN MAPPING: Always use the column 'selling_price' for any queries involving price, budget, cost, or lakhs. The column 'price' does NOT exist in the database; generating 'price' will result in a SQLite syntax error.
 8. AGE/YEAR MAPPING: The database contains 'vehicle_age' (age in years), NOT 'year'. To sort by newest cars or filter by year, use 'vehicle_age' (e.g., sort by 'vehicle_age ASC' to get the newest cars first). There is no 'year' column.
 9. FORBIDDEN COLUMNS: Do NOT query columns that are not in the schema (e.g. 'color', 'owner', 'location', 'city', 'variant'). If a user filters by these, ignore those filters in the SQL query. The assistant will address those preferences in the text response instead.
+10. SEATS MAPPING: The column containing the number of seats is 'seats', NOT 'seating_capacity' or 'capacity'. If the user asks for a family car, passenger capacity, or a specific number of seats, use the 'seats' column (e.g., seats >= 5).
 """
 
 RECOMMENDER_SYSTEM_PROMPT = """
@@ -119,17 +120,19 @@ def sanitize_and_validate_sql(query: str) -> str:
 @app.get("/api/health")
 def health():
     db_exists = os.path.exists(DB_PATH)
-    active_provider = None
-    if gemini_key:
-        active_provider = "Gemini"
-    elif openai_key:
-        active_provider = "OpenAI"
+    active_provider = "Gemini" if (AI_PROVIDER == "gemini" and gemini_client) else "OpenAI"
+    if active_provider == "Gemini" and not gemini_client:
+        active_provider = "OpenAI" if openai_client else None
+    elif active_provider == "OpenAI" and not openai_client:
+        active_provider = "Gemini" if gemini_client else None
         
     return {
         "status": "healthy",
         "openai_configured": openai_client is not None,
         "gemini_configured": gemini_client is not None,
         "active_provider": active_provider,
+        "openai_model": OPENAI_MODEL,
+        "gemini_model": GEMINI_MODEL,
         "database_exists": db_exists,
         "database_path": os.path.abspath(DB_PATH) if db_exists else None
     }
@@ -175,12 +178,21 @@ async def chat(request: ChatRequest):
             history_str += f"{role}: {text_val}\n"
         
         # Determine active provider
-        if gemini_client:
+        use_gemini = (AI_PROVIDER == "gemini" and gemini_client is not None)
+        use_openai = (AI_PROVIDER == "openai" and openai_client is not None)
+        
+        # Fallback if one is chosen but not available
+        if AI_PROVIDER == "gemini" and not gemini_client and openai_client:
+            use_openai = True
+        elif AI_PROVIDER == "openai" and not openai_client and gemini_client:
+            use_gemini = True
+            
+        if use_gemini:
             # === GOOGLE GEMINI (NEW SDK) EXECUTION ===
             # Step 1: SQL Generation using Structured Output schemas
             sql_prompt = f"{SQL_SYSTEM_PROMPT}\nConversation History:\n{history_str}\nUser query: {request.message}"
             sql_response = gemini_client.models.generate_content(
-                model="gemini-2.5-flash",
+                model=GEMINI_MODEL,
                 contents=sql_prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
@@ -213,12 +225,12 @@ async def chat(request: ChatRequest):
             # Step 4: Explanation & Summary
             recommender_prompt = f"{RECOMMENDER_SYSTEM_PROMPT}\nConversation History:\n{history_str}\nUser prompt: {request.message}\nDatabase results: {json.dumps(cars)}"
             recommender_response = gemini_client.models.generate_content(
-                model="gemini-2.5-flash",
+                model=GEMINI_MODEL,
                 contents=recommender_prompt
             )
             explanation = recommender_response.text
             
-        else:
+        elif use_openai:
             # === OPENAI EXECUTION ===
             # Step 1: SQL Generation using Structured Output parse client
             sql_generation_messages = [
@@ -226,7 +238,7 @@ async def chat(request: ChatRequest):
                 {"role": "user", "content": f"Conversation History:\n{history_str}\nUser query: {request.message}"}
             ]
             sql_response = openai_client.beta.chat.completions.parse(
-                model="gpt-4o-mini",
+                model=OPENAI_MODEL,
                 messages=sql_generation_messages,
                 response_format=SQLResponseSchema
             )
@@ -258,10 +270,15 @@ async def chat(request: ChatRequest):
                 {"role": "user", "content": f"Conversation History:\n{history_str}\nUser prompt: {request.message}\nDatabase results: {json.dumps(cars)}"}
             ]
             recommender_response = openai_client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=OPENAI_MODEL,
                 messages=recommender_messages
             )
             explanation = recommender_response.choices[0].message.content
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Selected AI Provider is not configured. Please add the required API key."
+            )
             
         return {
             "message": explanation,
@@ -305,18 +322,33 @@ Please write a concise 2-sentence explanation of why this specific car is a grea
 Keep it direct, professional, and friendly. Do not use markdown titles or bullet points. Just return the direct explanation text.
 """
         
-        if gemini_client:
+        # Determine active provider
+        use_gemini = (AI_PROVIDER == "gemini" and gemini_client is not None)
+        use_openai = (AI_PROVIDER == "openai" and openai_client is not None)
+        
+        # Fallback if one is chosen but not available
+        if AI_PROVIDER == "gemini" and not gemini_client and openai_client:
+            use_openai = True
+        elif AI_PROVIDER == "openai" and not openai_client and gemini_client:
+            use_gemini = True
+            
+        if use_gemini:
             response = gemini_client.models.generate_content(
-                model="gemini-2.5-flash",
+                model=GEMINI_MODEL,
                 contents=prompt
             )
             explanation = response.text
-        else:
+        elif use_openai:
             response = openai_client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=OPENAI_MODEL,
                 messages=[{"role": "user", "content": prompt}]
             )
             explanation = response.choices[0].message.content
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Selected AI Provider is not configured. Please add the required API key."
+            )
             
         return {"explanation": explanation.strip()}
     except Exception as e:
