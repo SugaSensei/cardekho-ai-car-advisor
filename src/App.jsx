@@ -127,41 +127,92 @@ export default function App() {
     return `₹ ${price.toLocaleString()}`;
   };
 
-  // Render basic markdown formatting (bold, inline code, italic, list markers)
+  // Render basic markdown formatting (headers, bold, inline code, italic, list markers)
   const renderMessageText = (text) => {
     if (!text) return null;
     
-    // Normalize bullet point lines starting with '* ' or '- ' to '• '
-    const normalizedText = text.replace(/^(\s*)[*-]\s+/gm, '$1• ');
+    // Split text into individual lines
+    const lines = text.split('\n');
     
-    // Split by ** for bold elements first
-    const boldParts = normalizedText.split(/(\*\*[^*]+\*\*)/g);
-    return boldParts.map((boldPart, boldIdx) => {
-      if (boldPart.startsWith('**') && boldPart.endsWith('**')) {
-        const inner = boldPart.slice(2, -2);
-        return <strong key={`b-${boldIdx}`} className="font-extrabold text-white">{inner}</strong>;
+    return lines.map((line, lineIdx) => {
+      // Check if line is a header
+      const h3Match = line.match(/^###\s+(.*)/);
+      const h2Match = line.match(/^##\s+(.*)/);
+      const h1Match = line.match(/^#\s+(.*)/);
+      
+      let content = line;
+      let isHeader = false;
+      let headerLevel = 0;
+      
+      if (h3Match) {
+        content = h3Match[1];
+        isHeader = true;
+        headerLevel = 3;
+      } else if (h2Match) {
+        content = h2Match[1];
+        isHeader = true;
+        headerLevel = 2;
+      } else if (h1Match) {
+        content = h1Match[1];
+        isHeader = true;
+        headerLevel = 1;
       }
       
-      // Split by ` for inline code elements
-      const codeParts = boldPart.split(/(`[^`]+`)/g);
-      return codeParts.map((codePart, codeIdx) => {
-        if (codePart.startsWith('`') && codePart.endsWith('`')) {
-          return (
-            <code key={`c-${boldIdx}-${codeIdx}`} className="bg-slate-950 border border-slate-800 text-rose-400 font-mono text-[11px] px-1.5 py-0.5 rounded-md font-semibold mx-0.5">
-              {codePart.slice(1, -1)}
-            </code>
-          );
-        }
-        
-        // Split by * for italic elements
-        const italicParts = codePart.split(/(\*[^*]+\*)/g);
-        return italicParts.map((italicPart, italicIdx) => {
-          if (italicPart.startsWith('*') && italicPart.endsWith('*')) {
-            return <em key={`i-${boldIdx}-${codeIdx}-${italicIdx}`} className="italic text-slate-300">{italicPart.slice(1, -1)}</em>;
+      // Normalize bullet point lines starting with '* ' or '- ' to '• ' (only if not a header)
+      if (!isHeader) {
+        content = content.replace(/^([ \t]*)[*-]\s+/, '$1• ');
+      }
+      
+      // Parse inline formats (bold, code, italic) for the line content
+      const parseInline = (textSegment) => {
+        // Split by ** for bold
+        const boldParts = textSegment.split(/(\*\*[^*]+\*\*)/g);
+        return boldParts.map((boldPart, boldIdx) => {
+          if (boldPart.startsWith('**') && boldPart.endsWith('**')) {
+            const inner = boldPart.slice(2, -2);
+            return <strong key={`b-${boldIdx}`} className="font-extrabold text-white">{inner}</strong>;
           }
-          return italicPart;
+          
+          // Split by ` for inline code
+          const codeParts = boldPart.split(/(`[^`]+`)/g);
+          return codeParts.map((codePart, codeIdx) => {
+            if (codePart.startsWith('`') && codePart.endsWith('`')) {
+              return (
+                <code key={`c-${boldIdx}-${codeIdx}`} className="bg-slate-950 border border-slate-800 text-rose-400 font-mono text-[11px] px-1.5 py-0.5 rounded-md font-semibold mx-0.5">
+                  {codePart.slice(1, -1)}
+                </code>
+              );
+            }
+            
+            // Split by * for italic
+            const italicParts = codePart.split(/(\*[^*]+\*)/g);
+            return italicParts.map((italicPart, italicIdx) => {
+              if (italicPart.startsWith('*') && italicPart.endsWith('*')) {
+                return <em key={`i-${boldIdx}-${codeIdx}-${italicIdx}`} className="italic text-slate-300">{italicPart.slice(1, -1)}</em>;
+              }
+              return italicPart;
+            });
+          });
         });
-      });
+      };
+      
+      // Render line appropriately
+      if (isHeader) {
+        if (headerLevel === 1) {
+          return <h1 key={lineIdx} className="text-base font-extrabold text-rose-500 mt-3 mb-1.5 block tracking-tight">{parseInline(content)}</h1>;
+        } else if (headerLevel === 2) {
+          return <h2 key={lineIdx} className="text-sm font-bold text-rose-400 mt-2.5 mb-1.5 block uppercase tracking-wide">{parseInline(content)}</h2>;
+        } else {
+          return <h3 key={lineIdx} className="text-xs font-bold text-amber-400 mt-2 mb-1 block uppercase tracking-wider">{parseInline(content)}</h3>;
+        }
+      }
+      
+      // Return normal line wrapped in a div. Add a small line break height if line is empty.
+      if (line.trim() === '') {
+        return <div key={lineIdx} className="h-1.5" />;
+      }
+      
+      return <div key={lineIdx} className="min-h-[1.25rem]">{parseInline(content)}</div>;
     });
   };
 
@@ -200,7 +251,7 @@ export default function App() {
                     ? 'bg-rose-600 text-white rounded-br-none' 
                     : 'bg-slate-800/80 border border-slate-700/50 text-slate-200 rounded-bl-none'
                 }`}>
-                  <p className="whitespace-pre-wrap">{renderMessageText(msg.text)}</p>
+                  <div className="whitespace-pre-wrap space-y-1">{renderMessageText(msg.text)}</div>
                 </div>
               </div>
             ))}
