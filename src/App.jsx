@@ -127,6 +127,30 @@ export default function App() {
     return `₹ ${price.toLocaleString()}`;
   };
 
+  // Render basic markdown formatting (bold, italic)
+  const renderMessageText = (text) => {
+    if (!text) return null;
+    
+    // Split by ** for bold elements
+    const parts = text.split(/(\*\*[^*]+\*\*)/g);
+    return parts.map((part, index) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        const inner = part.slice(2, -2);
+        return <strong key={index} className="font-extrabold text-white">{inner}</strong>;
+      }
+      
+      // Split by * for italic elements
+      const subParts = part.split(/(\*[^*]+\*)/g);
+      return subParts.map((subPart, subIndex) => {
+        if (subPart.startsWith('*') && subPart.endsWith('*')) {
+          return <em key={`${index}-${subIndex}`} className="italic text-slate-300">{subPart.slice(1, -1)}</em>;
+        }
+        return subPart;
+      });
+    });
+  };
+
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
       {/* Navbar */}
@@ -161,7 +185,7 @@ export default function App() {
                     ? 'bg-rose-600 text-white rounded-br-none' 
                     : 'bg-slate-800/80 border border-slate-700/50 text-slate-200 rounded-bl-none'
                 }`}>
-                  <p className="whitespace-pre-wrap">{msg.text}</p>
+                  <p className="whitespace-pre-wrap">{renderMessageText(msg.text)}</p>
                 </div>
               </div>
             ))}
