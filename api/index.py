@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import sqlite3
 import os
@@ -298,42 +299,54 @@ async def chat(request: ChatRequest):
                 
                 # If we made it here without ValueError or SQLite errors, break out of loop!
                 break
-                
             except ValueError as e:
                 last_error = str(e)
                 print(f"[Attempt {attempt + 1}/{attempts}] SQL generation validation failed: {last_error}")
                 if attempt == attempts - 1:
-                    # Exhausted all attempts
-                    return {
-                        "message": f"I had trouble formulating a valid query. Try rephrasing your search request! (Last validation failure: {last_error})",
-                        "cars": [],
-                        "sql": query
-                    }
+                    def error_generator():
+                        yield json.dumps({"type": "sql", "sql": query}) + "\n"
+                        yield json.dumps({"type": "cars", "cars": []}) + "\n"
+                        yield json.dumps({"type": "content", "delta": f"I had trouble formulating a valid query. Try rephrasing your search request! (Last validation failure: {last_error})"}) + "\n"
+                    return StreamingResponse(error_generator(), media_type="application/x-ndjson")
         
-        # Step 4: Explanation & Summary
-        if use_gemini:
-            recommender_prompt = f"{RECOMMENDER_SYSTEM_PROMPT}\nConversation History:\n{history_str}\nUser prompt: {request.message}\nDatabase results: {json.dumps(cars)}"
-            recommender_response = gemini_client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=recommender_prompt
-            )
-            explanation = recommender_response.text
-        else:
-            recommender_messages = [
-                {"role": "system", "content": RECOMMENDER_SYSTEM_PROMPT},
-                {"role": "user", "content": f"Conversation History:\n{history_str}\nUser prompt: {request.message}\nDatabase results: {json.dumps(cars)}"}
-            ]
-            recommender_response = openai_client.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=recommender_messages
-            )
-            explanation = recommender_response.choices[0].message.content
+        # Step 4: Stream Explanation & Summary
+        def event_generator():
+            # First, yield the metadata
+            yield json.dumps({"type": "sql", "sql": query}) + "\n"
+            yield json.dumps({"type": "cars", "cars": cars}) + "\n"
             
-        return {
-            "message": explanation,
-            "cars": cars,
-            "sql": query
-        }
+            # Stream the content from the selected provider
+            try:
+                if use_gemini:
+                    recommender_prompt = f"{RECOMMENDER_SYSTEM_PROMPT}\nConversation History:\n{history_str}\nUser prompt: {request.message}\nDatabase results: {json.dumps(cars)}"
+                    response_stream = gemini_client.models.generate_content_stream(
+                        model=GEMINI_MODEL,
+                        contents=recommender_prompt
+                    )
+                    for chunk in response_stream:
+                        if chunk.text:
+                            yield json.dumps({"type": "content", "delta": chunk.text}) + "\n"
+                else:
+                    recommender_messages = [
+                        {"role": "system", "content": RECOMMENDER_SYSTEM_PROMPT},
+                        {"role": "user", "content": f"Conversation History:\n{history_str}\nUser prompt: {request.message}\nDatabase results: {json.dumps(cars)}"}
+                    ]
+                    response_stream = openai_client.chat.completions.create(
+                        model=OPENAI_MODEL,
+                        messages=recommender_messages,
+                        stream=True
+                    )
+                    for chunk in response_stream:
+                        if len(chunk.choices) > 0:
+                            delta = chunk.choices[0].delta.content
+                            if delta:
+                                yield json.dumps({"type": "content", "delta": delta}) + "\n"
+            except Exception as stream_err:
+                import traceback
+                traceback.print_exc()
+                yield json.dumps({"type": "content", "delta": f"\n\n*(Error while streaming response: {stream_err})*"}) + "\n"
+                
+        return StreamingResponse(event_generator(), media_type="application/x-ndjson")
         
     except Exception as e:
         import traceback

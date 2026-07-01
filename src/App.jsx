@@ -62,11 +62,48 @@ export default function App() {
           history: currentHistory
         })
       });
-      const data = await res.json();
-      
-      setChatHistory(prev => [...prev, { sender: 'ai', text: data.message }]);
-      if (data.cars) setCurrentCars(data.cars);
-      if (data.sql) setDebugSql(data.sql);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      // Initialize an empty AI message in history that we will stream into
+      setChatHistory(prev => [...prev, { sender: 'ai', text: '' }]);
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+
+        // Save the last partial line back to the buffer
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const data = JSON.parse(line);
+            if (data.type === 'sql') {
+              if (data.sql) setDebugSql(data.sql);
+            } else if (data.type === 'cars') {
+              if (data.cars) setCurrentCars(data.cars);
+            } else if (data.type === 'content') {
+              // Append delta to the last message in history
+              setChatHistory(prev => {
+                const historyCopy = [...prev];
+                const lastMsg = historyCopy[historyCopy.length - 1];
+                if (lastMsg && lastMsg.sender === 'ai') {
+                  lastMsg.text += data.delta;
+                }
+                return historyCopy;
+              });
+            }
+          } catch (e) {
+            console.error("Failed to parse stream line:", e);
+          }
+        }
+      }
     } catch (err) {
       setChatHistory(prev => [...prev, { sender: 'ai', text: "Error: Failed to fetch recommendations." }]);
     } finally {
