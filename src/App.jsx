@@ -172,27 +172,17 @@ export default function App() {
     const lines = text.split('\n');
     
     return lines.map((line, lineIdx) => {
-      // Check if line is a header
-      const h3Match = line.match(/^###\s+(.*)/);
-      const h2Match = line.match(/^##\s+(.*)/);
-      const h1Match = line.match(/^#\s+(.*)/);
+      // Check if line is a header (levels 1-6)
+      const headerMatch = line.match(/^(#{1,6})\s+(.*)/);
       
       let content = line;
       let isHeader = false;
       let headerLevel = 0;
       
-      if (h3Match) {
-        content = h3Match[1];
+      if (headerMatch) {
+        content = headerMatch[2];
         isHeader = true;
-        headerLevel = 3;
-      } else if (h2Match) {
-        content = h2Match[1];
-        isHeader = true;
-        headerLevel = 2;
-      } else if (h1Match) {
-        content = h1Match[1];
-        isHeader = true;
-        headerLevel = 1;
+        headerLevel = headerMatch[1].length;
       }
       
       // Normalize bullet point lines starting with '* ' or '- ' to '• ' (only if not a header)
@@ -211,7 +201,7 @@ export default function App() {
           }
           
           // Split by ` for inline code
-          const codeParts = boldPart.split(/(`[^`]+`)/g);
+          const codeParts = boldPart.split(/(\`[^`]+\`)/g);
           return codeParts.map((codePart, codeIdx) => {
             if (codePart.startsWith('`') && codePart.endsWith('`')) {
               return (
@@ -239,8 +229,14 @@ export default function App() {
           return <h1 key={lineIdx} className="text-base font-extrabold text-rose-500 mt-3 mb-1.5 block tracking-tight">{parseInline(content)}</h1>;
         } else if (headerLevel === 2) {
           return <h2 key={lineIdx} className="text-sm font-bold text-rose-400 mt-2.5 mb-1.5 block uppercase tracking-wide">{parseInline(content)}</h2>;
-        } else {
+        } else if (headerLevel === 3) {
           return <h3 key={lineIdx} className="text-xs font-bold text-amber-400 mt-2 mb-1 block uppercase tracking-wider">{parseInline(content)}</h3>;
+        } else if (headerLevel === 4) {
+          return <h4 key={lineIdx} className="text-xs font-bold text-slate-200 mt-2 mb-1 block uppercase tracking-wider">{parseInline(content)}</h4>;
+        } else if (headerLevel === 5) {
+          return <h5 key={lineIdx} className="text-xs font-bold text-slate-300 mt-2 mb-1 block">{parseInline(content)}</h5>;
+        } else {
+          return <h6 key={lineIdx} className="text-xs font-semibold text-slate-400 mt-2 mb-1 block">{parseInline(content)}</h6>;
         }
       }
       
