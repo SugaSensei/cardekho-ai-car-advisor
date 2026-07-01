@@ -46,24 +46,30 @@ class ExplanationRequest(BaseModel):
     history: list = []
     query: str = ""
 
-# Schema definition for system prompt guidance
-DB_SCHEMA = """
-Table Name: cars
-Columns:
-- car_name: string (e.g. 'Maruti Alto', 'Hyundai Grand')
-- brand: string (e.g. 'Maruti', 'Hyundai', 'Honda', 'Ford', 'Skoda', 'Volkswagen', 'Toyota', 'Renault', 'Mahindra', 'Tata')
-- model: string (e.g. 'Alto', 'Grand', 'i20', 'Wagon R', 'Rapid', 'City', 'Civic', 'Ecosport')
-- vehicle_age: integer (age in years, e.g. 9, 5)
-- km_driven: integer (e.g. 120000, 20000)
-- seller_type: string ('Individual', 'Dealer', 'Trustmark Dealer')
-- fuel_type: string ('Petrol', 'Diesel', 'CNG', 'LPG', 'Electric')
-- transmission_type: string ('Manual', 'Automatic')
-- mileage: float (km per liter, e.g. 19.7, 18.9)
-- engine: integer (CC engine size, e.g. 796, 1197)
-- max_power: float (BHP power, e.g. 46.3, 82.0)
-- seats: integer (e.g. 5, 7)
-- selling_price: integer (price in Indian Rupees, e.g. 120000, 550000)
-"""
+from pydantic import Field
+
+class CarSchema(BaseModel):
+    car_name: str = Field(description="string (e.g. 'Maruti Alto', 'Hyundai Grand')")
+    brand: str = Field(description="string (e.g. 'Maruti', 'Hyundai', 'Honda', 'Ford', 'Skoda', 'Volkswagen', 'Toyota', 'Renault', 'Mahindra', 'Tata')")
+    model: str = Field(description="string (e.g. 'Alto', 'Grand', 'i20', 'Wagon R', 'Rapid', 'City', 'Civic', 'Ecosport')")
+    vehicle_age: int = Field(description="integer (age in years, e.g. 9, 5)")
+    km_driven: int = Field(description="integer (e.g. 120000, 20000)")
+    seller_type: str = Field(description="string ('Individual', 'Dealer', 'Trustmark Dealer')")
+    fuel_type: str = Field(description="string ('Petrol', 'Diesel', 'CNG', 'LPG', 'Electric')")
+    transmission_type: str = Field(description="string ('Manual', 'Automatic')")
+    mileage: float = Field(description="float (km per liter, e.g. 19.7, 18.9)")
+    engine: int = Field(description="integer (CC engine size, e.g. 796, 1197)")
+    max_power: float = Field(description="float (BHP power, e.g. 46.3, 82.0)")
+    seats: int = Field(description="integer (e.g. 5, 7)")
+    selling_price: int = Field(description="integer (price in Indian Rupees, e.g. 120000, 550000)")
+
+# Programmatically construct the database schema description from CarSchema fields to ensure a single source of truth.
+schema_lines = []
+for name, field in CarSchema.model_fields.items():
+    desc = field.description or ""
+    schema_lines.append(f"- {name}: {desc}")
+
+DB_SCHEMA = "Table Name: cars\nColumns:\n" + "\n".join(schema_lines)
 
 SQL_SYSTEM_PROMPT = """
 You are an expert database assistant converting user queries about used cars into SQLite queries.
@@ -101,7 +107,7 @@ If no cars are returned, explain kindly and suggest adjusting their parameters (
 """
 
 def sanitize_and_validate_sql(query: str) -> str:
-    """Validate that the query is a SELECT statement and block mutating keywords."""
+    """Validate that the query is a SELECT statement, blocks mutating keywords, and references only valid columns."""
     query_clean = query.strip()
     
     # Enforce SELECT only
@@ -115,6 +121,30 @@ def sanitize_and_validate_sql(query: str) -> str:
         if re.search(r'\b' + word + r'\b', query_clean.upper()):
             raise ValueError(f"Forbidden SQL operation detected: {word}")
             
+    # Parse columns and validate against CarSchema
+    allowed_cols = set(CarSchema.model_fields.keys())
+    
+    # Remove string literals to avoid matching words inside text search terms
+    clean_query = re.sub(r"'[^']*'", "", query_clean)
+    tokens = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', clean_query)
+    
+    sql_keywords = {
+        "select", "from", "where", "and", "or", "like", "order", "by", 
+        "limit", "asc", "desc", "not", "in", "is", "null", "between", 
+        "cars", "min", "max", "sum", "avg", "count", "group", "having",
+        "as", "union", "all", "exists", "case", "when", "then", "else", "end",
+        "abs", "round", "coalesce", "nullif"
+    }
+    
+    for token in tokens:
+        token_lower = token.lower()
+        if token_lower not in sql_keywords:
+            if token_lower not in allowed_cols:
+                raise ValueError(
+                    f"Column '{token}' does not exist in the 'cars' table schema. "
+                    f"Allowed columns are: {', '.join(sorted(allowed_cols))}."
+                )
+                
     return query_clean
 
 @app.get("/api/health")
@@ -187,84 +217,108 @@ async def chat(request: ChatRequest):
         elif AI_PROVIDER == "openai" and not openai_client and gemini_client:
             use_gemini = True
             
-        if use_gemini:
-            # === GOOGLE GEMINI (NEW SDK) EXECUTION ===
-            # Step 1: SQL Generation using Structured Output schemas
-            sql_prompt = f"{SQL_SYSTEM_PROMPT}\nConversation History:\n{history_str}\nUser query: {request.message}"
-            sql_response = gemini_client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=sql_prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=SQLResponseSchema
-                )
+        if not use_gemini and not use_openai:
+            raise HTTPException(
+                status_code=400,
+                detail="Selected AI Provider is not configured. Please add the required API key."
             )
-            sql_json = json.loads(sql_response.text)
-            query = sql_json.get("sql_query")
             
-            # Step 2: Validate SQL Query
-            query = sanitize_and_validate_sql(query)
-            
-            # Step 3: Query SQLite database in Read-Only Mode
-            conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
+        attempts = 3
+        last_error = None
+        
+        for attempt in range(attempts):
             try:
-                cursor.execute(query)
-                rows = cursor.fetchall()
-                cars = [dict(r) for r in rows]
-            except Exception as sql_err:
+                if use_gemini:
+                    # === GOOGLE GEMINI (NEW SDK) EXECUTION ===
+                    # Step 1: SQL Generation using Structured Output schemas
+                    if attempt > 0:
+                        sql_prompt = (
+                            f"{SQL_SYSTEM_PROMPT.replace('{DB_SCHEMA}', DB_SCHEMA)}\n"
+                            f"Conversation History:\n{history_str}\n"
+                            f"User query: {request.message}\n\n"
+                            f"CRITICAL: Your previous query '{query}' failed validation with error: {last_error}.\n"
+                            f"Please correct the query by using only valid columns and valid syntax."
+                        )
+                    else:
+                        sql_prompt = f"{SQL_SYSTEM_PROMPT.replace('{DB_SCHEMA}', DB_SCHEMA)}\nConversation History:\n{history_str}\nUser query: {request.message}"
+                        
+                    sql_response = gemini_client.models.generate_content(
+                        model=GEMINI_MODEL,
+                        contents=sql_prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            response_schema=SQLResponseSchema
+                        )
+                    )
+                    sql_json = json.loads(sql_response.text)
+                    query = sql_json.get("sql_query")
+                    
+                else:
+                    # === OPENAI EXECUTION ===
+                    # Step 1: SQL Generation using Structured Output parse client
+                    if attempt > 0:
+                        sql_generation_messages = [
+                            {"role": "system", "content": SQL_SYSTEM_PROMPT.replace('{DB_SCHEMA}', DB_SCHEMA)},
+                            {"role": "user", "content": (
+                                f"Conversation History:\n{history_str}\n"
+                                f"User query: {request.message}\n\n"
+                                f"CRITICAL: Your previous query '{query}' failed validation with error: {last_error}.\n"
+                                f"Please correct the query by using only valid columns and valid syntax."
+                            )}
+                        ]
+                    else:
+                        sql_generation_messages = [
+                            {"role": "system", "content": SQL_SYSTEM_PROMPT.replace('{DB_SCHEMA}', DB_SCHEMA)},
+                            {"role": "user", "content": f"Conversation History:\n{history_str}\nUser query: {request.message}"}
+                        ]
+                        
+                    sql_response = openai_client.beta.chat.completions.parse(
+                        model=OPENAI_MODEL,
+                        messages=sql_generation_messages,
+                        response_format=SQLResponseSchema
+                    )
+                    query = sql_response.choices[0].message.parsed.sql_query
+                
+                # Step 2: Validate SQL Query
+                query = sanitize_and_validate_sql(query)
+                
+                # Step 3: Query SQLite database in Read-Only Mode
+                conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(query)
+                    rows = cursor.fetchall()
+                    cars = [dict(r) for r in rows]
+                except Exception as sql_err:
+                    conn.close()
+                    # Treat execution errors as validation errors to trigger a retry
+                    raise ValueError(f"SQLite execution failed: {sql_err}")
                 conn.close()
-                return {
-                    "message": f"I had trouble executing the database query. Try rephrasing your search request! (Failed query details: {sql_err})",
-                    "cars": [],
-                    "sql": query
-                }
-            conn.close()
-            
-            # Step 4: Explanation & Summary
+                
+                # If we made it here without ValueError or SQLite errors, break out of loop!
+                break
+                
+            except ValueError as e:
+                last_error = str(e)
+                print(f"[Attempt {attempt + 1}/{attempts}] SQL generation validation failed: {last_error}")
+                if attempt == attempts - 1:
+                    # Exhausted all attempts
+                    return {
+                        "message": f"I had trouble formulating a valid query. Try rephrasing your search request! (Last validation failure: {last_error})",
+                        "cars": [],
+                        "sql": query
+                    }
+        
+        # Step 4: Explanation & Summary
+        if use_gemini:
             recommender_prompt = f"{RECOMMENDER_SYSTEM_PROMPT}\nConversation History:\n{history_str}\nUser prompt: {request.message}\nDatabase results: {json.dumps(cars)}"
             recommender_response = gemini_client.models.generate_content(
                 model=GEMINI_MODEL,
                 contents=recommender_prompt
             )
             explanation = recommender_response.text
-            
-        elif use_openai:
-            # === OPENAI EXECUTION ===
-            # Step 1: SQL Generation using Structured Output parse client
-            sql_generation_messages = [
-                {"role": "system", "content": SQL_SYSTEM_PROMPT},
-                {"role": "user", "content": f"Conversation History:\n{history_str}\nUser query: {request.message}"}
-            ]
-            sql_response = openai_client.beta.chat.completions.parse(
-                model=OPENAI_MODEL,
-                messages=sql_generation_messages,
-                response_format=SQLResponseSchema
-            )
-            query = sql_response.choices[0].message.parsed.sql_query
-            
-            # Step 2: Validate SQL Query
-            query = sanitize_and_validate_sql(query)
-            
-            # Step 3: Query SQLite database in Read-Only Mode
-            conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            try:
-                cursor.execute(query)
-                rows = cursor.fetchall()
-                cars = [dict(r) for r in rows]
-            except Exception as sql_err:
-                conn.close()
-                return {
-                    "message": f"I had trouble executing the database query. Try rephrasing your search request! (Failed query details: {sql_err})",
-                    "cars": [],
-                    "sql": query
-                }
-            conn.close()
-            
-            # Step 4: Explanation & Summary
+        else:
             recommender_messages = [
                 {"role": "system", "content": RECOMMENDER_SYSTEM_PROMPT},
                 {"role": "user", "content": f"Conversation History:\n{history_str}\nUser prompt: {request.message}\nDatabase results: {json.dumps(cars)}"}
@@ -274,11 +328,6 @@ async def chat(request: ChatRequest):
                 messages=recommender_messages
             )
             explanation = recommender_response.choices[0].message.content
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="Selected AI Provider is not configured. Please add the required API key."
-            )
             
         return {
             "message": explanation,
@@ -290,6 +339,7 @@ async def chat(request: ChatRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/explain")
 async def explain_suggestion(request: ExplanationRequest):
